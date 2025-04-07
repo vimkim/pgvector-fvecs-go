@@ -81,6 +81,18 @@ func main() {
 		log.Fatalf("Error creating table %s: %v", *tablename, err)
 	}
 
+	// Check if the table is empty by querying the row count
+	checkEmptySQL := fmt.Sprintf(`SELECT count(*) FROM %s`, *tablename)
+	var count int
+	err = pool.QueryRow(ctx, checkEmptySQL).Scan(&count)
+	if err != nil {
+		log.Fatalf("Error querying the number of rows in table %s: %v", *tablename, err)
+	}
+
+	if count > 0 {
+		log.Fatalf("Error: %d rows already exist in table %s", count, *tablename)
+	}
+
 	// Create a channel to queue vectors.
 	vectorCh := make(chan pgvector.Vector, 1000)
 	var wg sync.WaitGroup
