@@ -8,11 +8,15 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
-	pgxvec "github.com/pgvector/pgvector-go/pgx"
 )
+
+type VectorData struct {
+	Vec pgvector.Vector
+}
 
 func main() {
 	// Command-line flags
@@ -23,6 +27,7 @@ func main() {
 	password := flag.String("password", "", "Database password")
 	tablename := flag.String("tablename", "items", "Name of the table to load vectors into")
 	fvecsFile := flag.String("fvecs", "", "Path to fvecs file (required)")
+	workers := flag.Int("workers", 4, "Number of concurrent workers for insertion")
 	flag.Parse()
 
 	// Check required flags
@@ -34,22 +39,18 @@ func main() {
 	// Build the connection string
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s", *user, *password, *host, *port, *dbname)
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, connStr)
+
+	// Use a connection pool
+	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
-		log.Fatalf("Unable to connect to database: %v", err)
+		log.Fatalf("Unable to create connection pool: %v", err)
 	}
-	defer conn.Close(ctx)
+	defer pool.Close()
 
 	// Enable the pgvector extension
-	_, err = conn.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS vector")
+	_, err = pool.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS vector")
 	if err != nil {
 		log.Fatalf("Error enabling pgvector extension: %v", err)
-	}
-
-	// Register pgvector types with the connection (now using pgx v5)
-	err = pgxvec.RegisterTypes(ctx, conn)
-	if err != nil {
-		log.Fatalf("Error registering pgvector types: %v", err)
 	}
 
 	// Open the fvecs file
@@ -59,68 +60,80 @@ func main() {
 	}
 	defer file.Close()
 
-	// Read the dimension of the first vector to use for table definition.
-	// fvecs files start with an int32 indicating the vector dimension.
+	// Read the dimension of the first vector for table definition.
 	var dim int32
 	if err := binary.Read(file, binary.LittleEndian, &dim); err != nil {
 		log.Fatalf("Error reading dimension from fvecs file: %v", err)
 	}
-	// Reset file pointer back to the start of the file so all vectors are read.
+	// Reset file pointer back to start.
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		log.Fatalf("Error resetting file pointer: %v", err)
 	}
 
 	// Create the table if it does not exist.
-	// The table will have an id column and an embedding column of type vector(dim).
 	createTableSQL := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
-            id int,
-			embedding vector(%d)
+			id SERIAL PRIMARY KEY,
+			vec vector(%d)
 		)
 	`, *tablename, dim)
-	if _, err := conn.Exec(ctx, createTableSQL); err != nil {
+	if _, err := pool.Exec(ctx, createTableSQL); err != nil {
 		log.Fatalf("Error creating table %s: %v", *tablename, err)
 	}
 
-	// Begin reading vectors from the file and inserting them.
+	// Create a channel to queue vectors.
+	vectorCh := make(chan pgvector.Vector, 1000)
+	var wg sync.WaitGroup
+
+	// Worker function to insert vectors.
+	workerFunc := func(workerID int) {
+		defer wg.Done()
+		for vector := range vectorCh {
+			insertSQL := fmt.Sprintf("INSERT INTO %s (vec) VALUES ($1)", *tablename)
+			// Each worker gets a connection from the pool.
+			if _, err := pool.Exec(ctx, insertSQL, vector); err != nil {
+				log.Printf("Worker %d: Error inserting vector: %v", workerID, err)
+			}
+		}
+	}
+
+	// Start worker goroutines.
+	for i := 0; i < *workers; i++ {
+		wg.Add(1)
+		go workerFunc(i)
+	}
+
+	// Read vectors from file and send them to the channel.
 	inserted := 0
 	for {
-		// Read the dimension for this vector record.
 		var currentDim int32
 		err := binary.Read(file, binary.LittleEndian, &currentDim)
 		if err == io.EOF {
-			// End of file reached
 			break
 		}
 		if err != nil {
 			log.Fatalf("Error reading vector dimension: %v", err)
 		}
-		// Ensure the vector has the same dimension as the first one.
 		if currentDim != dim {
 			log.Fatalf("Dimension mismatch: expected %d but got %d", dim, currentDim)
 		}
 
-		// Read the vector values (each as float32)
 		vec := make([]float32, currentDim)
 		if err := binary.Read(file, binary.LittleEndian, &vec); err != nil {
 			log.Fatalf("Error reading vector values: %v", err)
 		}
-
-		// Create a pgvector instance from the slice
-		vector := pgvector.NewVector(vec)
-
-		// Insert the vector into the table.
-		insertSQL := fmt.Sprintf("INSERT INTO %s (embedding) VALUES ($1)", *tablename)
-		if _, err := conn.Exec(ctx, insertSQL, vector); err != nil {
-			log.Fatalf("Error inserting vector: %v", err)
-		}
+		vectorCh <- pgvector.NewVector(vec)
 
 		inserted++
-		// Print progress every 1000 vectors.
 		if inserted%1000 == 0 {
-			fmt.Printf("%d vectors inserted...\n", inserted)
+			fmt.Printf("%d vectors queued for insertion...\n", inserted)
 		}
 	}
+
+	// Close the channel to signal workers no more vectors are coming.
+	close(vectorCh)
+	// Wait for all workers to finish.
+	wg.Wait()
 
 	fmt.Printf("Finished inserting %d vectors into table '%s'.\n", inserted, *tablename)
 }
