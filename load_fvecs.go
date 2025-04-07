@@ -74,7 +74,7 @@ func main() {
 	// The table will have an id column and an embedding column of type vector(dim).
 	createTableSQL := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
-			id bigserial PRIMARY KEY,
+            id int,
 			embedding vector(%d)
 		)
 	`, *tablename, dim)
