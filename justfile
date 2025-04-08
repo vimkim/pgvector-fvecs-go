@@ -10,6 +10,18 @@ load-128-150000:
 load-128-300000:
     go run load_fvecs.go --dbname=vimkimdb -user=vimkim -tablename=tbl_128_300000 -fvecs ../vector-gen-go/data/vector_128dim_300000row_seed0.fvecs
 
+###############################################################################
+# load
+###############################################################################
+
+load-all: load-256-all load-768-all load-1536-all
+
+load-256-all: load-256-75000 load-256-150000 load-256-300000
+
+load-768-all: load-768-75000 load-768-150000 load-768-300000
+
+load-1536-all: load-1536-75000 load-1536-150000 load-1536-300000
+
 load-256-75000:
     go run load_fvecs.go --dbname=vimkimdb -user=vimkim -tablename=tbl_256_75000 -fvecs ../vector-gen-go/data/vector_256dim_75000row_seed0.fvecs
 
@@ -18,8 +30,6 @@ load-256-150000:
 
 load-256-300000:
     go run load_fvecs.go --dbname=vimkimdb -user=vimkim -tablename=tbl_256_300000 -fvecs ../vector-gen-go/data/vector_256dim_300000row_seed0.fvecs
-
-load-768-all: load-768-75000 load-768-150000 load-768-300000
 
 load-768-75000:
     go run load_fvecs.go --dbname=vimkimdb -user=vimkim -tablename=tbl_768_75000 -fvecs ../vector-gen-go/data/vector_768dim_75000row_seed0.fvecs
