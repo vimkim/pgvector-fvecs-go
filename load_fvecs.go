@@ -70,10 +70,16 @@ func main() {
 		log.Fatalf("Error resetting file pointer: %v", err)
 	}
 
+	// Drop table if exists
+	dropTableSQL := fmt.Sprintf(`DROP TABLE IF EXISTS %s;`, *tablename)
+	if _, err := pool.Exec(ctx, dropTableSQL); err != nil {
+		log.Fatalf("Error dropping table %s: %v", *tablename, err)
+	}
+
 	// Create the table if it does not exist.
 	createTableSQL := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
-			id SERIAL PRIMARY KEY,
+			id int,
 			vec vector(%d)
 		)
 	`, *tablename, dim)
