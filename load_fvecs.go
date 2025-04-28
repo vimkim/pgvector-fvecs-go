@@ -100,7 +100,7 @@ func main() {
 	}
 
 	// Create a channel to queue vectors.
-	vectorCh := make(chan pgvector.Vector, 1000)
+	vectorCh := make(chan pgvector.Vector, 10000)
 	var wg sync.WaitGroup
 
 	// Worker function to insert vectors.
@@ -143,7 +143,7 @@ func main() {
 		vectorCh <- pgvector.NewVector(vec)
 
 		inserted++
-		if inserted%1000 == 0 {
+		if inserted%10000 == 0 {
 			fmt.Printf("%d vectors queued for insertion...\n", inserted)
 		}
 	}
